@@ -5,14 +5,14 @@ use std::path::Path;
 use std::result;
 
 use csv_core::{
-    Reader as CoreReader, ReaderBuilder as CoreReaderBuilder,
+    Reader as CoreReader, ReaderBuilder as CoreReaderBuilder, Trim as CoreTrim
 };
 use serde::de::DeserializeOwned;
 
 use byte_record::{self, ByteRecord, Position};
 use error::{ErrorKind, Result, Utf8Error, new_error};
 use string_record::{self, StringRecord};
-use Terminator;
+use {Terminator, Trim};
 
 /// Builds a CSV reader with various configuration knobs.
 ///
@@ -509,6 +509,12 @@ impl ReaderBuilder {
     /// ```
     pub fn quoting(&mut self, yes: bool) -> &mut ReaderBuilder {
         self.builder.quoting(yes);
+        self
+    }
+
+    /// Set whitespace preservation behaviour
+    pub fn trim(&mut self, trim: Trim) -> &mut ReaderBuilder {
+        self.builder.trim(trim.to_core());
         self
     }
 
@@ -1449,13 +1455,21 @@ impl<R: io::Read> Reader<R> {
         // byte headers, then get the string headers (or a UTF-8 error).
         let (str_headers, byte_headers) = match headers {
             Ok(string) => {
-                let bytes = string.clone().into_byte_record();
+                let mut bytes = string.clone().into_byte_record();
+                match self.core.trim {
+                    CoreTrim::Headers | CoreTrim::All => bytes.trim(),
+                    _ => ()
+                }
                 (Ok(string), bytes)
             }
             Err(bytes) => {
-                match StringRecord::from_byte_record(bytes.clone()) {
-                    Ok(str_headers) => (Ok(str_headers), bytes),
-                    Err(err) => (Err(err.utf8_error().clone()), bytes),
+                let mut final_bytes = bytes;
+                if self.core.trim == CoreTrim::Headers || self.core.trim == CoreTrim::All {
+                    final_bytes.trim();
+                }
+                match StringRecord::from_byte_record(final_bytes.clone()) {
+                    Ok(str_headers) => (Ok(str_headers), final_bytes),
+                    Err(err) => (Err(err.utf8_error().clone()), final_bytes),
                 }
             }
         };
@@ -1558,6 +1572,9 @@ impl<R: io::Read> Reader<R> {
             if let Some(ref headers) = self.state.headers {
                 self.state.first = true;
                 record.clone_from(&headers.byte_record);
+                if self.core.trim == CoreTrim::Fields || self.core.trim == CoreTrim::All {
+                    record.trim();
+                }
                 return Ok(!record.is_empty());
             }
         }
@@ -1569,8 +1586,14 @@ impl<R: io::Read> Reader<R> {
             // never return the first row. Instead, we should attempt to
             // read and return the next one.
             if self.state.has_headers {
-                return self.read_byte_record_impl(record);
+                let ret_val = self.read_byte_record_impl(record);
+                if self.core.trim == CoreTrim::Fields || self.core.trim == CoreTrim::All {
+                    record.trim();
+                }
+                return ret_val;
             }
+        } else if self.core.trim == CoreTrim::Fields || self.core.trim == CoreTrim::All {
+            record.trim();
         }
         Ok(ok)
     }
@@ -2134,7 +2157,7 @@ mod tests {
     use error::ErrorKind;
     use string_record::StringRecord;
 
-    use super::{ReaderBuilder, Position};
+    use super::{ReaderBuilder, Position, Trim};
 
     fn b(s: &str) -> &[u8] { s.as_bytes() }
     fn s(b: &[u8]) -> &str { ::std::str::from_utf8(b).unwrap() }
@@ -2166,6 +2189,67 @@ mod tests {
         assert_eq!("xyz", s(&rec[2]));
 
         assert!(!rdr.read_byte_record(&mut rec).unwrap());
+    }
+
+    #[test]
+    fn read_trimmed_records() {
+        let data = b("foo,  bar,\tbaz\n  1,  2,  3\n1\t,\t,3\t\t");
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .trim(Trim::All)
+            .from_reader(data);
+        let mut rec = ByteRecord::new();
+        assert!(rdr.read_byte_record(&mut rec).unwrap());
+        assert_eq!("1", s(&rec[0]));
+        assert_eq!("2", s(&rec[1]));
+        assert_eq!("3", s(&rec[2]));
+        assert!(rdr.read_byte_record(&mut rec).unwrap());
+        assert_eq!("1", s(&rec[0]));
+        assert_eq!("", s(&rec[1]));
+        assert_eq!("3", s(&rec[2]));
+        {
+            let headers = rdr.headers().unwrap();
+            assert_eq!(3, headers.len());
+            assert_eq!("foo", &headers[0]);
+            assert_eq!("bar", &headers[1]);
+            assert_eq!("baz", &headers[2]);
+        }
+
+        // headers only
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .trim(Trim::Headers)
+            .from_reader(data);
+        let mut rec = ByteRecord::new();
+        assert!(rdr.read_byte_record(&mut rec).unwrap());
+        assert_eq!("  1", s(&rec[0]));
+        assert_eq!("  2", s(&rec[1]));
+        assert_eq!("  3", s(&rec[2]));
+        {
+            let headers = rdr.headers().unwrap();
+            assert_eq!(3, headers.len());
+            assert_eq!("foo", &headers[0]);
+            assert_eq!("bar", &headers[1]);
+            assert_eq!("baz", &headers[2]);
+        }
+
+        // fields only
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .trim(Trim::Fields)
+            .from_reader(data);
+        let mut rec = ByteRecord::new();
+        assert!(rdr.read_byte_record(&mut rec).unwrap());
+        assert_eq!("1", s(&rec[0]));
+        assert_eq!("2", s(&rec[1]));
+        assert_eq!("3", s(&rec[2]));
+        {
+            let headers = rdr.headers().unwrap();
+            assert_eq!(3, headers.len());
+            assert_eq!("foo", &headers[0]);
+            assert_eq!("  bar", &headers[1]);
+            assert_eq!("\tbaz", &headers[2]);
+        }
     }
 
     #[test]

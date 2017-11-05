@@ -190,3 +190,29 @@ impl Default for QuoteStyle {
         QuoteStyle::Necessary
     }
 }
+
+/// The whitespace preservation behaviour when reading CSV data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Trim {
+    /// Preserves fields and headers.
+    None,
+    /// Trim whitespace from headers
+    Headers,
+    /// Trim whitespace from fields
+	Fields,
+    /// Trim whitespace from fields and headers
+    All,
+    /// Hints that destructuring should not be exhaustive.
+    ///
+    /// This enum may grow additional variants, so this makes sure clients
+    /// don't count on exhaustive matching. (Otherwise, adding a new variant
+    /// could break existing code.)
+    #[doc(hidden)]
+    __Nonexhaustive,
+}
+
+impl Default for Trim {
+    fn default() -> Trim {
+        Trim::None
+    }
+}

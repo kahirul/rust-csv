@@ -1,6 +1,6 @@
 use core::fmt;
 
-use Terminator;
+use {Terminator, Trim};
 
 // BE ADVISED
 //
@@ -104,6 +104,8 @@ pub struct Reader {
     delimiter: u8,
     /// The terminator that separates records.
     term: Terminator,
+    /// Whether to trim fields or headers
+    pub trim: Trim,
     /// The quotation byte.
     quote: u8,
     /// Whether to recognize escaped quotes.
@@ -136,6 +138,7 @@ impl Default for Reader {
             nfa_state: NfaState::StartRecord,
             delimiter: b',',
             term: Terminator::default(),
+            trim: Trim::default(),
             quote: b'"',
             escape: None,
             double_quote: true,
@@ -193,6 +196,11 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set whitespace preservation behaviour
+    pub fn trim(&mut self, trim: Trim) -> &mut ReaderBuilder {
+        self.rdr.trim = trim;
+        self
+    }
     /// The quote character to use when parsing CSV.
     ///
     /// The default is `b'"'`.

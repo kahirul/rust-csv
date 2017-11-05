@@ -417,6 +417,52 @@ impl ByteRecord {
         self.truncate(0);
     }
 
+    /// Trim the fields of this record so that leading and trailing whitespace is removed.
+    ///
+    /// Note that the whitespace trimmed is currently only the ASCII space and tab.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use csv::ByteRecord;
+    ///
+    /// let mut record = ByteRecord::from(vec!["  ", "\tfoo", "bar  ", "b a z"]);
+    /// record.trim();
+    /// assert_eq!(record, vec!["", "foo", "bar", "b a z"]);
+    /// ```
+    pub fn trim(&mut self) {
+        let mut trimmed = 0;
+
+        for field in 0..self.len() {
+            self.0.bounds.ends[field] -= trimmed;
+            let bound = self.0.bounds.get(field).unwrap();
+
+            let front_whitespace = self.count_leading_whitespace(bound.clone());
+
+            let mut back_whitespace = 0;
+            if front_whitespace < bound.end - bound.start {
+                back_whitespace = self.count_leading_whitespace(bound.clone().rev());
+            }
+
+            self.0.fields.drain(bound.end - back_whitespace..bound.end);
+            self.0.fields.drain(bound.start..bound.start + front_whitespace);
+            self.0.bounds.ends[field] -= front_whitespace + back_whitespace;
+            trimmed += front_whitespace + back_whitespace;
+        }
+    }
+
+    fn count_leading_whitespace<R: Iterator<Item=usize>>(&self, range: R) -> usize {
+        let mut count = 0;
+        for i in range {
+            let field_char = self.0.fields[i] as char;
+            if field_char != ' ' && field_char != '\t' {
+                break;
+            }
+            count += 1;
+        }
+        count
+    }
+
     /// Add a new field to this record.
     ///
     /// # Example
@@ -840,6 +886,16 @@ mod tests {
         assert_eq!(rec.len(), 0);
         assert_eq!(rec.get(0), None);
         assert_eq!(rec.get(1), None);
+    }
+
+    #[test]
+    fn whitespace_only_record_trimmed() {
+        let mut rec = ByteRecord::new();
+        rec.push_field(b" \t ");
+
+        rec.trim();
+
+        assert_eq!(rec.get(0), Some(b("")));
     }
 
     #[test]
